@@ -22,6 +22,9 @@ Resources:
           ExpirationInDays: '7'
   ProcessedDataBucket:
     Type: AWS::S3::Bucket
+    DependsOn:
+    - S3NotificationLambdaFunction
+    - LogsBucket
     Properties:
       LoggingConfiguration:
         DestinationBucketName:
@@ -90,7 +93,7 @@ Resources:
         CompressionFormat: UNCOMPRESSED
         EncryptionConfiguration:
           NoEncryptionConfig: NoEncryption
-        Prefix: proccessed-data/
+        Prefix: raw-data/
         RoleARN:
           Fn::GetAtt:
           - IngestDataDeliveryStreamRole
@@ -108,66 +111,13 @@ Resources:
         GROUP BY s."building_id", s."unit", STEP(s.ROWTIME BY INTERVAL ''1'' SECOND),
         STEP(s.APPROXIMATE_ARRIVAL_TIME BY INTERVAL ''1'' SECOND);
 
+        CREATE OR REPLACE STREAM "TEMPERATURE_ANOMALY_STREAM" ( "temperature" DOUBLE,
+        "arrival_time" TIMESTAMP, "ANOMALY_SCORE" DOUBLE, "ANOMALY_EXPLANATION" varchar(512));
 
-
-        CREATE OR REPLACE STREAM "SQL_STREAM_HUMIDITY" ( "building_id" VARCHAR(12),
-        "humidity" DOUBLE, "unit" VARCHAR(12), "arrival_time" TIMESTAMP);
-
-        CREATE OR REPLACE PUMP "STREAM_PUMP_HUMIDITY" AS INSERT INTO "SQL_STREAM_HUMIDITY"
-        SELECT STREAM s."building_id" as building_id, avg(s."data_value") as humidity,
-        s."unit" as unit, STEP(s.APPROXIMATE_ARRIVAL_TIME BY INTERVAL ''1'' SECOND)
-        AS "arrival_time" FROM "SOURCE_SQL_STREAM_001" s WHERE s."data_type" = ''humidity''
-        GROUP BY s."building_id", s."unit", STEP(s.ROWTIME BY INTERVAL ''1'' SECOND),
-        STEP(s.APPROXIMATE_ARRIVAL_TIME BY INTERVAL ''1'' SECOND);
-
-
-
-        CREATE OR REPLACE STREAM "SQL_STREAM_VIBRATION_FREQ" ( "building_id" VARCHAR(12),
-        "vibration_frequency" DOUBLE, "unit" VARCHAR(12), "arrival_time" TIMESTAMP);
-
-        CREATE OR REPLACE PUMP "STREAM_PUMP_VIBRATION_FREQ" AS INSERT INTO "SQL_STREAM_VIBRATION_FREQ"
-        SELECT STREAM s."building_id" as building_id, avg(s."data_value") as vibration_frequency,
-        s."unit" as unit, STEP(s.APPROXIMATE_ARRIVAL_TIME BY INTERVAL ''1'' SECOND)
-        AS "arrival_time" FROM "SOURCE_SQL_STREAM_001" s WHERE s."data_type" = ''vibration_frequency''
-        GROUP BY s."building_id", s."unit", STEP(s.ROWTIME BY INTERVAL ''1'' SECOND),
-        STEP(s.APPROXIMATE_ARRIVAL_TIME BY INTERVAL ''1'' SECOND);
-
-        CREATE OR REPLACE STREAM "SQL_STREAM_VIBRATION_DISP" ( "building_id" VARCHAR(12),
-        "vibration_displacement" DOUBLE, "unit" VARCHAR(12), "arrival_time" TIMESTAMP);
-
-        CREATE OR REPLACE PUMP "STREAM_PUMP_VIBRATION_DISP" AS INSERT INTO "SQL_STREAM_VIBRATION_DISP"
-        SELECT STREAM s."building_id" as building_id, avg(s."data_value") as vibration_displacement,
-        s."unit" as unit, STEP(s.APPROXIMATE_ARRIVAL_TIME BY INTERVAL ''1'' SECOND)
-        AS "arrival_time" FROM "SOURCE_SQL_STREAM_001" s WHERE s."data_type" = ''vibration_displacement''
-        GROUP BY s."building_id", s."unit", STEP(s.ROWTIME BY INTERVAL ''1'' SECOND),
-        STEP(s.APPROXIMATE_ARRIVAL_TIME BY INTERVAL ''1'' SECOND);
-
-
-
-        -- This is the stream joining the two sets of vibration readings CREATE OR
-        REPLACE STREAM "SQL_STREAM_VIBRATION_MERGED" ( "building_id" VARCHAR(12),
-        "arrival_time" timestamp, "vibration_frequency_value" double, "vibration_frequency_unit"
-        VARCHAR(12), "vibration_displacement_value" double, "vibration_displacement_unit"
-        VARCHAR(12) );
-
-        CREATE OR REPLACE PUMP "STREAM_PUMP_VIBRATION_MERGED" AS INSERT INTO "SQL_STREAM_VIBRATION_MERGED"
-        SELECT STREAM s1."building_id" as "building_id", s1."arrival_time" as "arrival_time",
-        s1."vibration_frequency" as "vibration_frequency_value", s1."unit" as "vibration_frequency_unit",
-        s2."vibration_displacement" as "vibration_displacement_value", s2."unit" as
-        "vibration_displacement_unit" FROM "SQL_STREAM_VIBRATION_FREQ" s1 JOIN "SQL_STREAM_VIBRATION_DISP"
-        s2 ON s1."arrival_time"=s2."arrival_time" AND s1."building_id"=s2."building_id";
-
-
-
-        CREATE OR REPLACE STREAM "VIBRATION_ANOMALY_STREAM" ( "vibration_frequency_value"
-        DOUBLE, "vibration_displacement_value" DOUBLE, "arrival_time" TIMESTAMP, "ANOMALY_SCORE"
-        DOUBLE, "ANOMALY_EXPLANATION" varchar(512));
-
-        CREATE OR REPLACE PUMP "VIBRATION_ANOMALY_PUMP" AS INSERT INTO "VIBRATION_ANOMALY_STREAM"
-        SELECT STREAM "vibration_frequency_value", "vibration_displacement_value",
-        "arrival_time", ANOMALY_SCORE, ANOMALY_EXPLANATION FROM TABLE(RANDOM_CUT_FOREST_WITH_EXPLANATION(
-        CURSOR(SELECT STREAM * FROM "SQL_STREAM_VIBRATION_MERGED"), 100, 100, 100000,
-        5, true));'
+        CREATE OR REPLACE PUMP "TEMPERATURE_ANOMALY_PUMP" AS INSERT INTO "TEMPERATURE_ANOMALY_STREAM"
+        SELECT STREAM "temperature", "arrival_time", ANOMALY_SCORE, ANOMALY_EXPLANATION
+        FROM TABLE(RANDOM_CUT_FOREST_WITH_EXPLANATION( CURSOR(SELECT STREAM * FROM
+        "SQL_STREAM_TEMPERATURE"), 100, 100, 100000, 5, true));'
       Inputs:
       - NamePrefix: SOURCE_SQL_STREAM
         InputSchema:
@@ -221,6 +171,7 @@ Resources:
             Fn::GetAtt:
             - KinesisAnalyticsRole
             - Arn
+        Name: SQL_STREAM_TEMPERATURE
   ProccessedDataDeliveryStream:
     Type: AWS::KinesisFirehose::DeliveryStream
     Properties:
@@ -415,6 +366,9 @@ Resources:
             Resource: '*'
   LambdaInvokePermission:
     Type: AWS::Lambda::Permission
+    DependsOn:
+    - ProcessedDataBucket
+    - S3NotificationLambdaFunction
     Properties:
       FunctionName:
         Fn::GetAtt:

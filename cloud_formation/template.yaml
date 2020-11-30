@@ -23,34 +23,37 @@ Resources:
         LogFilePrefix: iot-data-ingest/
       LifecycleConfiguration:
         Rules:
-        - Id: ExpirationRule
-          Status: Enabled
-          ExpirationInDays: '7'
+          - Id: ExpirationRule
+            Status: Enabled
+            ExpirationInDays: "7"
 
   # Buckets for processed data
   ProcessedDataBucket:
     # DeletionPolicy: Retain
     Type: AWS::S3::Bucket
+    DependsOn:
+      - S3NotificationLambdaFunction
+      - LogsBucket
     Properties:
       LoggingConfiguration:
         DestinationBucketName: !Ref LogsBucket
         LogFilePrefix: processed-data/
       LifecycleConfiguration:
         Rules:
-        - Id: ExpirationRule
-          Status: Enabled
-          ExpirationInDays: '7'
-      NotificationConfiguration:   #Update stack with NotificationConfiguration
-          LambdaConfigurations:
-              - Event: 's3:ObjectCreated:Put'
-                Function: !GetAtt S3NotificationLambdaFunction.Arn
-                Filter: 
-                  S3Key:
-                    Rules:
-                      - Name: prefix
-                        Value: proccessed-data/
+          - Id: ExpirationRule
+            Status: Enabled
+            ExpirationInDays: "7"
+      NotificationConfiguration: #Update stack with NotificationConfiguration
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:Put
+            Function: !GetAtt S3NotificationLambdaFunction.Arn
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: proccessed-data/
 
-  # Logging bucket 
+  # Logging bucket
   LogsBucket:
     # DeletionPolicy: Retain
     Type: AWS::S3::Bucket
@@ -71,15 +74,15 @@ Resources:
     Type: AWS::IoT::TopicRule
     Properties:
       TopicRulePayload:
-        Description: 'Send IoT Device data in raw format to Kinesis Analytics'
-        AwsIotSqlVersion: '2016-03-23'
-        RuleDisabled: 'false'
+        Description: "Send IoT Device data in raw format to Kinesis Analytics"
+        AwsIotSqlVersion: "2016-03-23"
+        RuleDisabled: "false"
         Sql: !Sub 'SELECT *
-                  FROM "${DataIngestTopic}"'
+          FROM "${DataIngestTopic}"'
         Actions:
           - Firehose:
               DeliveryStreamName: !Ref IngestDataDeliveryStream
-              RoleArn: !Sub '${IoTTopicRuleRole.Arn}'
+              RoleArn: !Sub "${IoTTopicRuleRole.Arn}"
               Separator: "\n"
 
   # Ingest Data Delivery Stream
@@ -94,145 +97,66 @@ Resources:
         CloudWatchLoggingOptions:
           Enabled: true
           LogGroupName: !Ref IoTDataProcessingLogGroup
-          LogStreamName: 'IngestDataS3Delivery'
-        CompressionFormat: 'UNCOMPRESSED'
+          LogStreamName: "IngestDataS3Delivery"
+        CompressionFormat: "UNCOMPRESSED"
         EncryptionConfiguration:
-          NoEncryptionConfig: 'NoEncryption'
-        Prefix: 'proccessed-data/'
+          NoEncryptionConfig: "NoEncryption"
+        Prefix: "raw-data/"
         RoleARN: !GetAtt IngestDataDeliveryStreamRole.Arn
 
   AnomalyDetectionApplication:
     Type: AWS::KinesisAnalytics::Application
     Properties:
-      ApplicationCode: 
-        CREATE OR REPLACE STREAM "SQL_STREAM_TEMPERATURE" (
-            "building_id" VARCHAR(12),
-            "temperature" DOUBLE,
-            "unit" VARCHAR(12),
-            "arrival_time" TIMESTAMP);
+      ApplicationCode: CREATE OR REPLACE STREAM "SQL_STREAM_TEMPERATURE" (
+        "building_id" VARCHAR(12),
+        "temperature" DOUBLE,
+        "unit" VARCHAR(12),
+        "arrival_time" TIMESTAMP);
 
         CREATE OR REPLACE PUMP "STREAM_PUMP_TEMPERATURE" AS INSERT INTO "SQL_STREAM_TEMPERATURE"
-        SELECT STREAM 
-            s."building_id" as building_id, 
-            avg(s."data_value") as temperature, 
-            s."unit" as unit,
-            STEP(s.APPROXIMATE_ARRIVAL_TIME BY INTERVAL '1' SECOND) AS "arrival_time"
+        SELECT STREAM
+        s."building_id" as building_id,
+        avg(s."data_value") as temperature,
+        s."unit" as unit,
+        STEP(s.APPROXIMATE_ARRIVAL_TIME BY INTERVAL '1' SECOND) AS "arrival_time"
         FROM "SOURCE_SQL_STREAM_001" s
         WHERE s."data_type" = 'temperature'
         GROUP BY s."building_id", s."unit", STEP(s.ROWTIME BY INTERVAL '1' SECOND), STEP(s.APPROXIMATE_ARRIVAL_TIME BY INTERVAL '1' SECOND);
 
+        CREATE OR REPLACE STREAM "TEMPERATURE_ANOMALY_STREAM" (
+        "temperature" DOUBLE,
+        "arrival_time" TIMESTAMP,
+        "ANOMALY_SCORE" DOUBLE,
+        "ANOMALY_EXPLANATION" varchar(512));
 
-
-        CREATE OR REPLACE STREAM "SQL_STREAM_HUMIDITY" (
-            "building_id" VARCHAR(12),
-            "humidity" DOUBLE,
-            "unit" VARCHAR(12),
-            "arrival_time" TIMESTAMP);
-
-        CREATE OR REPLACE PUMP "STREAM_PUMP_HUMIDITY" AS INSERT INTO "SQL_STREAM_HUMIDITY"
-        SELECT STREAM 
-            s."building_id" as building_id, 
-            avg(s."data_value") as humidity, 
-            s."unit" as unit,
-            STEP(s.APPROXIMATE_ARRIVAL_TIME BY INTERVAL '1' SECOND) AS "arrival_time"
-        FROM "SOURCE_SQL_STREAM_001" s
-        WHERE s."data_type" = 'humidity'
-        GROUP BY s."building_id", s."unit", STEP(s.ROWTIME BY INTERVAL '1' SECOND), STEP(s.APPROXIMATE_ARRIVAL_TIME BY INTERVAL '1' SECOND);
-
-
-
-        CREATE OR REPLACE STREAM "SQL_STREAM_VIBRATION_FREQ" (
-            "building_id" VARCHAR(12),
-            "vibration_frequency" DOUBLE,
-            "unit" VARCHAR(12),
-            "arrival_time" TIMESTAMP);
-
-        CREATE OR REPLACE PUMP "STREAM_PUMP_VIBRATION_FREQ" AS INSERT INTO "SQL_STREAM_VIBRATION_FREQ"
-        SELECT STREAM 
-            s."building_id" as building_id, 
-            avg(s."data_value") as vibration_frequency, 
-            s."unit" as unit,
-            STEP(s.APPROXIMATE_ARRIVAL_TIME BY INTERVAL '1' SECOND) AS "arrival_time"
-        FROM "SOURCE_SQL_STREAM_001" s
-        WHERE s."data_type" = 'vibration_frequency'
-        GROUP BY s."building_id", s."unit", STEP(s.ROWTIME BY INTERVAL '1' SECOND), STEP(s.APPROXIMATE_ARRIVAL_TIME BY INTERVAL '1' SECOND);
-
-        CREATE OR REPLACE STREAM "SQL_STREAM_VIBRATION_DISP" (
-            "building_id" VARCHAR(12),
-            "vibration_displacement" DOUBLE,
-            "unit" VARCHAR(12),
-            "arrival_time" TIMESTAMP);
-
-        CREATE OR REPLACE PUMP "STREAM_PUMP_VIBRATION_DISP" AS INSERT INTO "SQL_STREAM_VIBRATION_DISP"
-        SELECT STREAM 
-            s."building_id" as building_id, 
-            avg(s."data_value") as vibration_displacement, 
-            s."unit" as unit,
-            STEP(s.APPROXIMATE_ARRIVAL_TIME BY INTERVAL '1' SECOND) AS "arrival_time"
-        FROM "SOURCE_SQL_STREAM_001" s
-        WHERE s."data_type" = 'vibration_displacement'
-        GROUP BY s."building_id", s."unit", STEP(s.ROWTIME BY INTERVAL '1' SECOND), STEP(s.APPROXIMATE_ARRIVAL_TIME BY INTERVAL '1' SECOND);
-
-
-
-        -- This is the stream joining the two sets of vibration readings
-        CREATE OR REPLACE STREAM "SQL_STREAM_VIBRATION_MERGED" (
-            "building_id" VARCHAR(12),
-            "arrival_time" timestamp,
-            "vibration_frequency_value" double,
-            "vibration_frequency_unit" VARCHAR(12),
-            "vibration_displacement_value" double,
-            "vibration_displacement_unit" VARCHAR(12)
-        );
-
-        CREATE OR REPLACE PUMP "STREAM_PUMP_VIBRATION_MERGED" AS INSERT INTO "SQL_STREAM_VIBRATION_MERGED"
-        SELECT STREAM 
-            s1."building_id" as "building_id",
-            s1."arrival_time" as "arrival_time",
-            s1."vibration_frequency" as "vibration_frequency_value", 
-            s1."unit" as "vibration_frequency_unit",
-            s2."vibration_displacement" as "vibration_displacement_value", 
-            s2."unit" as "vibration_displacement_unit"
-        FROM "SQL_STREAM_VIBRATION_FREQ" s1 JOIN "SQL_STREAM_VIBRATION_DISP" s2
-        ON s1."arrival_time"=s2."arrival_time" AND s1."building_id"=s2."building_id";
-
-
-
-        CREATE OR REPLACE STREAM "VIBRATION_ANOMALY_STREAM" (
-                    "vibration_frequency_value" DOUBLE,
-                    "vibration_displacement_value" DOUBLE,
-                    "arrival_time" TIMESTAMP,
-                    "ANOMALY_SCORE" DOUBLE,
-                    "ANOMALY_EXPLANATION" varchar(512));
-
-        CREATE OR REPLACE PUMP "VIBRATION_ANOMALY_PUMP" AS 
-            INSERT INTO "VIBRATION_ANOMALY_STREAM"
-                SELECT STREAM "vibration_frequency_value", "vibration_displacement_value", "arrival_time", ANOMALY_SCORE, ANOMALY_EXPLANATION 
-                FROM TABLE(RANDOM_CUT_FOREST_WITH_EXPLANATION(
-                    CURSOR(SELECT STREAM * FROM "SQL_STREAM_VIBRATION_MERGED"), 100, 100, 100000, 5, true));
+        CREATE OR REPLACE PUMP "TEMPERATURE_ANOMALY_PUMP" AS
+        INSERT INTO "TEMPERATURE_ANOMALY_STREAM"
+        SELECT STREAM "temperature", "arrival_time", ANOMALY_SCORE, ANOMALY_EXPLANATION
+        FROM TABLE(RANDOM_CUT_FOREST_WITH_EXPLANATION(
+        CURSOR(SELECT STREAM * FROM "SQL_STREAM_TEMPERATURE"), 100, 100, 100000, 5, true));
 
       Inputs:
         - NamePrefix: "SOURCE_SQL_STREAM"
           InputSchema:
             RecordColumns:
-             - Name: "data_type"
-               SqlType: "VARCHAR(32)"
-               Mapping: "$.data_type"
-             - Name: "unit"
-               SqlType: "VARCHAR(16)"
-               Mapping: "$.unit"
-             - Name: "data_value"
-               SqlType: "DECIMAL"
-               Mapping: "$.data_value"
-             - Name: "measurement_timestamp"
-               SqlType: "BIGINT"
-               Mapping: "$.measurement_timestamp"
-             - Name: "building_id"
-               SqlType: "VARCHAR(32)"
-               Mapping: "$.building_id"
-             - Name: "sensor_station_id"
-               SqlType: "VARCHAR(32)"
-               Mapping: "$.sensor_station_id"
+              - Name: "data_type"
+                SqlType: "VARCHAR(32)"
+                Mapping: "$.data_type"
+              - Name: "unit"
+                SqlType: "VARCHAR(16)"
+                Mapping: "$.unit"
+              - Name: "data_value"
+                SqlType: "DECIMAL"
+                Mapping: "$.data_value"
+              - Name: "measurement_timestamp"
+                SqlType: "BIGINT"
+                Mapping: "$.measurement_timestamp"
+              - Name: "building_id"
+                SqlType: "VARCHAR(32)"
+                Mapping: "$.building_id"
+              - Name: "sensor_station_id"
+                SqlType: "VARCHAR(32)"
+                Mapping: "$.sensor_station_id"
             RecordFormat:
               RecordFormatType: "JSON"
               MappingParameters:
@@ -252,6 +176,8 @@ Resources:
         KinesisFirehoseOutput:
           ResourceARN: !GetAtt ProccessedDataDeliveryStream.Arn
           RoleARN: !GetAtt KinesisAnalyticsRole.Arn
+        Name: SQL_STREAM_TEMPERATURE
+
 
   # Ingest Data Delivery Stream
   ProccessedDataDeliveryStream:
@@ -265,11 +191,11 @@ Resources:
         CloudWatchLoggingOptions:
           Enabled: true
           LogGroupName: !Ref IoTDataProcessingLogGroup
-          LogStreamName: 'ProccessedDataS3Delivery'
-        CompressionFormat: 'UNCOMPRESSED'
+          LogStreamName: "ProccessedDataS3Delivery"
+        CompressionFormat: "UNCOMPRESSED"
         EncryptionConfiguration:
-          NoEncryptionConfig: 'NoEncryption'
-        Prefix: 'proccessed-data/'
+          NoEncryptionConfig: "NoEncryption"
+        Prefix: "proccessed-data/"
         RoleARN: !GetAtt ProccessedDataDeliveryStreamRole.Arn
 
   S3NotificationLambdaFunction:
@@ -282,7 +208,6 @@ Resources:
       MemorySize: 256
       Role: !GetAtt LambdaIAMRole.Arn
       Timeout: 300
-
 
   ########################################################################
   # IAM Roles & Logs
@@ -298,27 +223,24 @@ Resources:
     Properties:
       LogGroupName: !Ref IoTDataProcessingLogGroup
 
-
-
   IngestDataDeliveryStreamRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
-        Version: '2012-10-17'
+        Version: "2012-10-17"
         Statement:
           - Effect: Allow
             Principal:
               Service:
-                - 'firehose.amazonaws.com'
+                - "firehose.amazonaws.com"
             Action:
-              - 'sts:AssumeRole'
+              - "sts:AssumeRole"
       Path: /
       Policies:
-
         # Puts objects in IngestDataBucket
-        - PolicyName: 'IngestDataS3UploadPolicy'
+        - PolicyName: "IngestDataS3UploadPolicy"
           PolicyDocument:
-            Version: '2012-10-17'
+            Version: "2012-10-17"
             Statement:
               - Effect: Allow
                 Action:
@@ -329,14 +251,14 @@ Resources:
                   - s3:ListBucket
                   - s3:ListBucketMultipartUploads
                 Resource:
-                  - !Sub '${IngestDataBucket.Arn}'
-                  - !Sub '${IngestDataBucket.Arn}/'
-                  - !Sub '${IngestDataBucket.Arn}/*'
+                  - !Sub "${IngestDataBucket.Arn}"
+                  - !Sub "${IngestDataBucket.Arn}/"
+                  - !Sub "${IngestDataBucket.Arn}/*"
 
         # Write to CloudWatch
         - PolicyName: IngestDataDeliveryStreamLogging
           PolicyDocument:
-            Version: '2012-10-17'
+            Version: "2012-10-17"
             Statement:
               - Effect: Allow
                 Action:
@@ -344,14 +266,13 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutDestination
                   - logs:PutLogEvents
-                Resource:
-                  !Join
-                    - ''
-                    - - 'arn:aws:logs:'
-                      - !Ref AWS::Region
-                      - ':'
-                      - !Ref AWS::AccountId
-                      - ':log-group:*'
+                Resource: !Join
+                  - ""
+                  - - "arn:aws:logs:"
+                    - !Ref AWS::Region
+                    - ":"
+                    - !Ref AWS::AccountId
+                    - ":log-group:*"
     Metadata:
       cfn_nag:
         rules_to_suppress:
@@ -362,21 +283,20 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
-        Version: '2012-10-17'
+        Version: "2012-10-17"
         Statement:
           - Effect: Allow
             Principal:
               Service:
-                - 'firehose.amazonaws.com'
+                - "firehose.amazonaws.com"
             Action:
-              - 'sts:AssumeRole'
+              - "sts:AssumeRole"
       Path: /
       Policies:
-
         # Puts objects in IngestDataBucket
-        - PolicyName: 'ProccessedDataS3UploadPolicy'
+        - PolicyName: "ProccessedDataS3UploadPolicy"
           PolicyDocument:
-            Version: '2012-10-17'
+            Version: "2012-10-17"
             Statement:
               - Effect: Allow
                 Action:
@@ -387,14 +307,14 @@ Resources:
                   - s3:ListBucket
                   - s3:ListBucketMultipartUploads
                 Resource:
-                  - !Sub '${ProcessedDataBucket.Arn}'
-                  - !Sub '${ProcessedDataBucket.Arn}/'
-                  - !Sub '${ProcessedDataBucket.Arn}/*'
+                  - !Sub "${ProcessedDataBucket.Arn}"
+                  - !Sub "${ProcessedDataBucket.Arn}/"
+                  - !Sub "${ProcessedDataBucket.Arn}/*"
 
         # Write to CloudWatch
         - PolicyName: IngestDataDeliveryStreamLogging
           PolicyDocument:
-            Version: '2012-10-17'
+            Version: "2012-10-17"
             Statement:
               - Effect: Allow
                 Action:
@@ -402,35 +322,32 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutDestination
                   - logs:PutLogEvents
-                Resource:
-                  !Join
-                    - ''
-                    - - 'arn:aws:logs:'
-                      - !Ref AWS::Region
-                      - ':'
-                      - !Ref AWS::AccountId
-                      - ':log-group:*'
+                Resource: !Join
+                  - ""
+                  - - "arn:aws:logs:"
+                    - !Ref AWS::Region
+                    - ":"
+                    - !Ref AWS::AccountId
+                    - ":log-group:*"
 
-            
   IoTTopicRuleRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
-        Version: '2012-10-17'
+        Version: "2012-10-17"
         Statement:
           - Effect: Allow
             Principal:
               Service:
-                - 'iot.amazonaws.com'
+                - "iot.amazonaws.com"
             Action:
-              - 'sts:AssumeRole'
+              - "sts:AssumeRole"
       Path: /
       Policies:
-
         # Posts to IngestDataDeliveryStream
-        - PolicyName: 'IoTTopicRulePolicy'
+        - PolicyName: "IoTTopicRulePolicy"
           PolicyDocument:
-            Version: '2012-10-17'
+            Version: "2012-10-17"
             Statement:
               Effect: Allow
               Action:
@@ -438,7 +355,7 @@ Resources:
                 - firehose:ListDeliveryStreams
                 - firehose:PutRecord
                 - firehose:PutRecordBatch
-              Resource: !Sub '${IngestDataDeliveryStream.Arn}'
+              Resource: !Sub "${IngestDataDeliveryStream.Arn}"
 
   KinesisAnalyticsRole:
     Type: AWS::IAM::Role
@@ -461,16 +378,19 @@ Resources:
                 Resource: "*"
 
   LambdaInvokePermission:
-    Type: 'AWS::Lambda::Permission'
+    Type: "AWS::Lambda::Permission"
+    DependsOn:
+      - ProcessedDataBucket
+      - S3NotificationLambdaFunction
     Properties:
       FunctionName: !GetAtt S3NotificationLambdaFunction.Arn
-      Action: 'lambda:InvokeFunction'
+      Action: "lambda:InvokeFunction"
       Principal: s3.amazonaws.com
-      SourceAccount: !Ref 'AWS::AccountId'
-      SourceArn: !Sub 'arn:aws:s3:::${ProcessedDataBucket}'
+      SourceAccount: !Ref "AWS::AccountId"
+      SourceArn: !Sub "arn:aws:s3:::${ProcessedDataBucket}"
 
   LambdaIAMRole:
-    Type: 'AWS::IAM::Role'
+    Type: "AWS::IAM::Role"
     Properties:
       AssumeRolePolicyDocument:
         Version: 2012-10-17
@@ -480,7 +400,7 @@ Resources:
               Service:
                 - lambda.amazonaws.com
             Action:
-              - 'sts:AssumeRole'
+              - "sts:AssumeRole"
       Path: /
       Policies:
         - PolicyName: root
@@ -489,32 +409,29 @@ Resources:
             Statement:
               - Effect: Allow
                 Action:
-                  - 's3:*'
-                  - 'sagemaker:*'
-                Resource: '*'
+                  - "s3:*"
+                  - "sagemaker:*"
+                Resource: "*"
               - Effect: Allow
                 Action:
-                  - 'logs:CreateLogGroup'
-                  - 'logs:CreateLogStream'
-                  - 'logs:PutLogEvents'
-                Resource: 'arn:aws:logs:*:*:*'
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: "arn:aws:logs:*:*:*"
 
 Outputs:
   IngestDataDeliveryStreamArn:
     Description: Arn of Ingest Data Delivery Stream
-    Value:  !GetAtt IngestDataDeliveryStream.Arn
+    Value: !GetAtt IngestDataDeliveryStream.Arn
     Export:
       Name: !Sub "${AWS::StackName}-IngestDataDeliveryStreamArn"
   ProcessedDataBucketArn:
     Description: Arn of S3 bucket for processed data
-    Value:  !GetAtt ProcessedDataBucket.Arn
+    Value: !GetAtt ProcessedDataBucket.Arn
     Export:
       Name: !Sub "${AWS::StackName}-ProcessedDataBucketArn"
   IoTDataProcessingLogGroup:
     Description: Log Group Name for logging
-    Value:  !Ref IoTDataProcessingLogGroup
+    Value: !Ref IoTDataProcessingLogGroup
     Export:
       Name: !Sub "${AWS::StackName}-IoTDataProcessingLogGroup"
-
-
-

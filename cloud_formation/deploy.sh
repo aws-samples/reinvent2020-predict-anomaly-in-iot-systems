@@ -25,7 +25,7 @@ S3_BUCKET=$(echo "$HYPHEN_PREFIX-$AWS_ACCOUNT_ID-$AWS_REGION-${ENVIRONMENT}" | t
 
 echo "Bucket name : $S3_BUCKET";
 
-bucketstatus=$(aws s3api head-bucket --bucket "${S3_BUCKET}" 2>&1)
+bucketstatus=$(aws s3api head-bucket --bucket "${S3_BUCKET}" $AWS_ARGS 2>&1)
 
 if [ -z "$bucketstatus" ]
 then
